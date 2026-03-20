@@ -7,41 +7,74 @@ export interface SampledColor {
 }
 
 /**
- * Returns the shortest angular distance between two hue angles on a
- * 0–360° circle.
- */
-function angularDistance(a: number, b: number): number {
-    const diff = Math.abs(a - b) % 360;
-    return diff > 180 ? 360 - diff : diff;
-}
-
-/**
- * Checks whether `candidate` is at least `minDist` degrees away from
- * every angle in `existing`.
- */
-function isFarEnough(candidate: number, existing: number[], minDist: number): boolean {
-    return existing.every((a) => angularDistance(candidate, a) >= minDist);
-}
-
-/**
- * Samples a random angle (0–360) that is at least `minDist` degrees
- * from all angles in `existing`. Retries up to `maxAttempts` times.
+ * Generates `n` random gaps on a 360° circle, each at least `minDist`
+ * degrees, summing to exactly 360.
  *
- * @throws if no valid angle is found within the attempt limit
+ * Uses the broken-stick method: generate n-1 random cut points in
+ * [0, slack], sort them, take consecutive differences.
+ *
+ * @throws if n * minDist > 360 (impossible constraint)
  */
-function sampleAngle(existing: number[], minDist: number, maxAttempts = 1000): number {
-    for (let i = 0; i < maxAttempts; i++) {
-        const candidate = Math.random() * 360;
-        if (isFarEnough(candidate, existing, minDist)) {
-            return candidate;
-        }
+function randomGaps(n: number, minDist: number): number[] {
+    if (n * minDist > 360) {
+        throw new Error(
+            `colorSampler: cannot place ${n} colors with ${minDist}° minimum distance`
+        );
     }
-    
-    throw new Error(
-        `colorSampler: failed to find a valid angle after ${maxAttempts} attempts ` +
-        `(existing: ${existing.length}, minDist: ${minDist}°)`
-    );
+
+    const slack = 360 - n * minDist;
+
+    // Broken-stick: n-1 random cuts in [0, slack], then differences
+    const cuts = Array.from({ length: n - 1 }, () => Math.random() * slack);
+    cuts.sort((a, b) => a - b);
+
+    const gaps: number[] = [];
+    let prev = 0;
+    for (const cut of cuts) {
+        gaps.push(minDist + (cut - prev));
+        prev = cut;
+    }
+    gaps.push(minDist + (slack - prev)); // last gap wraps around
+
+    return gaps;
 }
+
+// /**
+//  * Returns the shortest angular distance between two hue angles on a
+//  * 0–360° circle.
+//  */
+// function angularDistance(a: number, b: number): number {
+//     const diff = Math.abs(a - b) % 360;
+//     return diff > 180 ? 360 - diff : diff;
+// }
+
+// /**
+//  * Checks whether `candidate` is at least `minDist` degrees away from
+//  * every angle in `existing`.
+//  */
+// function isFarEnough(candidate: number, existing: number[], minDist: number): boolean {
+//     return existing.every((a) => angularDistance(candidate, a) >= minDist);
+// }
+
+// /**
+//  * Samples a random angle (0–360) that is at least `minDist` degrees
+//  * from all angles in `existing`. Retries up to `maxAttempts` times.
+//  *
+//  * @throws if no valid angle is found within the attempt limit
+//  */
+// function sampleAngle(existing: number[], minDist: number, maxAttempts = 1000): number {
+//     for (let i = 0; i < maxAttempts; i++) {
+//         const candidate = Math.random() * 360;
+//         if (isFarEnough(candidate, existing, minDist)) {
+//             return candidate;
+//         }
+//     }
+    
+//     throw new Error(
+//         `colorSampler: failed to find a valid angle after ${maxAttempts} attempts ` +
+//         `(existing: ${existing.length}, minDist: ${minDist}°)`
+//     );
+// }
 
 /**
  * Samples `n` mutually distinct colors.
@@ -89,23 +122,36 @@ export function sampleFoilColors(
 }
 
 // ── Continuous mode internals ──────────────────────────────────────────
- 
 function sampleFromWheel(n: number): SampledColor[] {
-    const minDist = COLOR.MIN_DISTANCE;
-    const angles: number[] = [];
+    const gaps = randomGaps(n, COLOR.MIN_DISTANCE);
+    const start = Math.random() * 360;
     const results: SampledColor[] = [];
 
-    for (let i = 0; i < n; i++) {
-        const angle = sampleAngle(angles, minDist);
-        angles.push(angle);
-        results.push({
-            angle,
-            hex: getLabCol(angle),
-        });
+    let angle = start;
+    for (const gap of gaps) {
+        results.push({ angle, hex: getLabCol(angle) });
+        angle = (angle + gap) % 360;
     }
-    
+
     return results;
 }
+
+// function sampleFromWheel(n: number): SampledColor[] {
+//     const minDist = COLOR.MIN_DISTANCE;
+//     const angles: number[] = [];
+//     const results: SampledColor[] = [];
+
+//     for (let i = 0; i < n; i++) {
+//         const angle = sampleAngle(angles, minDist);
+//         angles.push(angle);
+//         results.push({
+//             angle,
+//             hex: getLabCol(angle),
+//         });
+//     }
+    
+//     return results;
+// }
 
 function sampleFoilsFromWheel(targetAngle: number, count: number): SampledColor[] {
     // 9AFC condition
@@ -121,20 +167,32 @@ function sampleFoilsFromWheel(targetAngle: number, count: number): SampledColor[
         return results;
     }
 
-    // other conditions
-    const minDist = COLOR.MIN_DISTANCE;
-    const existing: number[] = [targetAngle];
+    // Other conditions: place target + foils as (count+1) points on the wheel
+    const gaps = randomGaps(count + 1, COLOR.MIN_DISTANCE);
     const results: SampledColor[] = [];
+
+    let angle = targetAngle;
     for (let i = 0; i < count; i++) {
-        const angle = sampleAngle(existing, minDist);
-        existing.push(angle);
-        results.push({
-            angle,
-            hex: getLabCol(angle),
-        });
+        angle = (angle + gaps[i]) % 360;
+        results.push({ angle, hex: getLabCol(angle) });
     }
-    
+
     return results;
+
+    // // other conditions
+    // const minDist = COLOR.MIN_DISTANCE;
+    // const existing: number[] = [targetAngle];
+    // const results: SampledColor[] = [];
+    // for (let i = 0; i < count; i++) {
+    //     const angle = sampleAngle(existing, minDist);
+    //     existing.push(angle);
+    //     results.push({
+    //         angle,
+    //         hex: getLabCol(angle),
+    //     });
+    // }
+    
+    // return results;
 }
  
 // ── Fixed mode internals ───────────────────────────────────────────────
